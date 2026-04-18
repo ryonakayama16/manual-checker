@@ -24,6 +24,10 @@ export default function Home() {
     setIsDragging(false);
     const dropped = e.dataTransfer.files[0];
     if (dropped?.type === "application/pdf") {
+      if (dropped.size > 10 * 1024 * 1024) {
+        setError("10MB以下のPDFをアップロードしてください");
+        return;
+      }
       setFile(dropped);
       setResult(null);
       setError("");
@@ -661,6 +665,8 @@ export default function Home() {
                     PDFファイルをここにドラッグ＆ドロップ
                     <br />
                     またはクリックしてファイルを選択
+                  </p>
+                  <p style={{fontSize:"0.78rem",color:"#9ca3af",marginTop:"0.5rem"}}>／ 10MB以下・50ページ以内のPDFのみ ／
                   </p>
                   <button className="btn-select" type="button">
                     ファイルを選択

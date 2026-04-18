@@ -9,6 +9,9 @@ export const config = {
   },
 };
 
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_PAGES = 50;
+
 export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse
@@ -17,10 +20,13 @@ export default async function handler(
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const form = formidable({ maxFileSize: 50 * 1024 * 1024 });
+  const form = formidable({ maxFileSize: MAX_FILE_SIZE });
 
   form.parse(req, async (err, fields, files) => {
     if (err) {
+      if (err.code === 1009 || err.message?.includes("maxFileSize")) {
+        return res.status(400).json({ error: "ファイルサイズが大きすぎます。10MB以下のPDFをアップロードしてください。" });
+      }
       return res.status(400).json({ error: "ファイルの解析に失敗しました" });
     }
 
@@ -30,19 +36,27 @@ export default async function handler(
     }
 
     try {
-      // PDFテキスト抽出
       const pdfBuffer = fs.readFileSync(file.filepath);
       let pdfText = "";
+      let pageCount = 0;
 
       try {
         const pdfParse = require("pdf-parse");
         const pdfData = await pdfParse(pdfBuffer);
         pdfText = pdfData.text || "";
+        pageCount = pdfData.numpages || 0;
+
+        // ページ数チェック
+        if (pageCount > MAX_PAGES) {
+          fs.unlinkSync(file.filepath);
+          return res.status(400).json({
+            error: `ページ数が多すぎます（${pageCount}ページ）。50ページ以下のPDFをアップロードしてください。`
+          });
+        }
       } catch (e) {
         pdfText = "（PDFテキスト抽出不可 - 画像系PDFの可能性があります）";
       }
 
-      // Anthropic APIで診断
       const criteriaText = CRITERIA.map((cat) => {
         const items = cat.items.map((item) => `  - ${item.text}`).join("\n");
         return `【${cat.category}】（${cat.description}）\n${items}`;
@@ -136,10 +150,8 @@ ${pdfText.slice(0, 8000)}
       );
 
       const anthropicData = await anthropicRes.json();
-      const responseText =
-        anthropicData.content?.[0]?.text || "";
+      const responseText = anthropicData.content?.[0]?.text || "";
 
-      // JSONパース
       let diagnosisResult;
       try {
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -152,15 +164,12 @@ ${pdfText.slice(0, 8000)}
         return res.status(500).json({ error: "診断結果の解析に失敗しました" });
       }
 
-      // クリーンアップ
-      try {
-        fs.unlinkSync(file.filepath);
-      } catch (e) {}
+      try { fs.unlinkSync(file.filepath); } catch (e) {}
 
       return res.status(200).json({
         success: true,
         result: diagnosisResult,
-        pageCount: pdfText.length > 100 ? "テキスト抽出成功" : "画像PDF",
+        pageCount,
       });
     } catch (error) {
       console.error(error);
